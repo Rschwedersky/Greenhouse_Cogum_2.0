@@ -8,6 +8,7 @@
 #include "LittleFS.h"
 #include <ezTime.h>
 #include <LiquidCrystal_I2C.h>
+#include "../data/secrets.h"
 
 #define SHT31_ADDRESS   0x44
 
@@ -16,16 +17,16 @@ uint32_t stop;
 SHT31 sht;
 LiquidCrystal_I2C lcd(0x27,16,2);
 
-const int releHum= 12;
-const int releTemp= 13;
-const int vent= 14;
-const int led = 4; //todo
+const int releHum = D6;   // GPIO12
+const int releTemp = D7;  // GPIO13
+const int vent = D0;      // GPIO16
+const int led = D3;  // GPIO15
 
 float t = 0.0;
 float h = 0.0;
 
-float humLow = 75;
-float humHigh = 85;
+float humLow = 91;
+float humHigh = 92;
 int humOn = 0;
 
 float tempLow = 10;
@@ -37,15 +38,9 @@ int ventOn = 0;
 
 unsigned long previousMillis = 0; //stoe last time SHT was updated
 const long interval = 1000;
-/****** WiFi Connection Details *******/
-const char* ssid = "Pura Vivo";
-const char* password = "rodrigo1000";
-
-/******* MQTT Broker Connection Details *******/
-const char* mqtt_server = "daf2ed2d22014cc5821a43f3fdcf44a9.s1.eu.hivemq.cloud";
-const char* mqtt_username = "@Rshw";
-const char* mqtt_password = "@Rshw123456789";
-const int mqtt_port =8883;
+unsigned long relayActivatedMillis = 0;
+const unsigned long stabilizationTime = 60000; // Delay for stabilization in milliseconds (e.g., 1 minute)
+bool relayDelayActive = false;
 
 /**** Secure WiFi Connectivity Initialisation *****/
 WiFiClientSecure espClient;
@@ -58,40 +53,26 @@ unsigned long lastMsg = 0;
 char msg[MSG_BUFFER_SIZE];
 
 
-/****** root certificate *********/
+/****** Load secrets from LittleFS ******/
+void loadSecrets() {
+  if (!LittleFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
 
-const char* test_root_ca= \
-  "-----BEGIN CERTIFICATE-----\n" \
-  "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\n" \
-  "-----END CERTIFICATE-----\n";
+  File file = LittleFS.open("/secrets.h", "r");
+  if (!file) {
+    Serial.println("Failed to open secrets file");
+    return;
+  }
+
+  while (file.available()) {
+    Serial.write(file.read());  // For debugging, you can see the file's content.
+  }
+
+  file.close();
+}
+
 
 /************* Connect to WiFi ***********/
 void setup_wifi() {
@@ -162,23 +143,25 @@ void callback(char* topic, byte* payload, unsigned int length) {
     //Led Income
     if( strcmp(topic,"input_led") == 0){
       if (incommingMessage.equals("1")) {
-        digitalWrite(led, LOW);
+        digitalWrite(led, HIGH);
         ledOn = 1;
       }   // Turn the LED on
       else {
-        digitalWrite(led, HIGH);
+        digitalWrite(led, LOW);
         ledOn = 0;
       }  // Turn the LED off
     }
     //vent Income
     if( strcmp(topic,"input_vent") == 0){
       if (incommingMessage.equals("1")) {
-        digitalWrite(vent, LOW);
+        digitalWrite(vent, HIGH);
         ventOn = 1;
       }   // Turn on?? TODO
       else {
-        digitalWrite(vent, HIGH);
-        ventOn = 0;
+        if (humOn == 0){
+          digitalWrite(vent, LOW);
+          ventOn = 0;
+        }
       }  // Turn off
     }
 
@@ -196,14 +179,19 @@ void setup() {
   sht.begin(SHT31_ADDRESS);
   pinMode(led, OUTPUT); //set up LED TODO
   pinMode(releHum, OUTPUT);
+  pinMode(vent, OUTPUT); //set up LED TODO
+  pinMode(releTemp, OUTPUT);
   lcd.begin (16,2);
   lcd.setBacklight(HIGH);
+
+   // Load secrets from LittleFS
+  loadSecrets();
   Serial.begin(9600);
   while (!Serial) delay(1);
   setup_wifi();
-  Timezone myTZ;
-  myTZ.setLocation(F("Brazil/East"));
   waitForSync();
+  Timezone myTZ;
+  myTZ.setLocation(F("America/Sao_Paulo"));
   
   #ifdef ESP8266
     espClient.setInsecure();
@@ -250,28 +238,47 @@ void loop() {
     }
     //hum
     if (h < humLow){
-      digitalWrite(releHum, LOW);
+      digitalWrite(releHum, HIGH);
+      digitalWrite(vent, HIGH);
       humOn = 1 ;
+      ventOn = 1;
     } 
     else if (humLow < h and h < humHigh and humOn==1){
-      digitalWrite(releHum, LOW);
+      digitalWrite(releHum, HIGH);
+      digitalWrite(vent, HIGH);
+      ventOn = 1;
     }
     else{
-      digitalWrite(releHum, HIGH);
-      humOn = 0 ;  
+      digitalWrite(releHum, LOW);
+      digitalWrite(vent, LOW);
+      humOn = 0 ;
+      ventOn = 0;  
     } 
     //temp
-    if (t < tempLow){
-      digitalWrite(releTemp, LOW);
-      tempOn = 1 ;
+    // Temp control
+    if (t < tempLow) {
+        // Temperature is below the lower threshold, turn off the refrigerator
+        digitalWrite(releTemp, LOW);
+        tempOn = 0;
     } 
-    else if (tempLow < t and t < tempHigh and tempOn==1){
-      digitalWrite(releTemp, LOW);
-    }
-    else{
+    else if (t >= tempLow && t <= tempHigh && tempOn == 1) {
+        // Temperature is within the desired range and refrigerator is already on, keep it on
+        digitalWrite(releTemp, HIGH);
+    } 
+    else if (t > tempHigh && !relayDelayActive) {
+      // Temperature is above the upper threshold, turn on the refrigerator
       digitalWrite(releTemp, HIGH);
-      tempOn = 0 ;  
-    } 
+      tempOn = 1;
+
+      // Start the stabilization delay timer
+      relayActivatedMillis = currentMillis;
+      relayDelayActive = true;
+    }
+
+    // Check if the stabilization delay has passed
+    if (relayDelayActive && (currentMillis - relayActivatedMillis >= stabilizationTime)) {
+      relayDelayActive = false;
+    }
   }
 lcd.setCursor(0,0); //SETA A POSIÇÃO DO CURSOR
 lcd.print("Hum:"); //IMPRIME O TEXTO NO DISPLAY LCD
@@ -283,6 +290,11 @@ lcd.print("Min: ");
 lcd.print(humLow,0);
 lcd.print(" Max: ");
 lcd.print(humHigh,0);
+/* digitalWrite(led, HIGH);
+digitalWrite(releTemp, HIGH);
+digitalWrite(releHum, HIGH);
+digitalWrite(vent, HIGH); */
+
 
   DynamicJsonDocument doc(1024);
 
