@@ -254,7 +254,6 @@ void loop() {
       humOn = 0 ;
       ventOn = 0;  
     } 
-    //temp
     // Temp control
     if (t < tempLow) {
         // Temperature is below the lower threshold, turn off the refrigerator
